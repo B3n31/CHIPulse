@@ -1,105 +1,149 @@
 #!/usr/bin/env python3
-
+"""
+Fetch HCI-related works from OpenAlex via concepts.id, locally filter by venue substrings.
+每抓到一条立即写 CSV 并打印到终端，方便调试。
+"""
 import os
-import argparse
+import time
+import csv
 import requests
-import pandas as pd
 from tqdm import tqdm
 
+# ---------------- Configuration ----------------
+MAILTO     = "tza80@sfu.ca"   # <-- 替换成你的邮箱
+START_YEAR = 2020             # 最早抓取年份
+END_YEAR   = 2025             # 最晚抓取年份
+OUTPUT_CSV = "data/raw/hci_works_full.csv"
+PER_PAGE   = 200              # 每页最大条数（OpenAlex 限制）
+RATE_LIMIT = 0.1              # 每页之间暂停时间（秒）
+FILTER_STR = "concepts.id:C107457646"  # AR/VR/HCI 在 OpenAlex 的概念 ID
+
+# 本地再次按会议或期刊名过滤，只保留核心 HCI 论坛
+VENUE_SUBSTRINGS = [
+    "CHI Conference on Human Factors",
+    "Computer Supported Cooperative Work",
+    "UIST",
+    "Transactions on Computer-Human Interaction",
+    "Designing Interactive Systems",
+    "Intelligent User Interfaces",
+    "Mobile Human-Computer Interaction",
+    "Engineering Interactive Computing Systems",
+    "Tangible, Embedded, and Embodied Interaction",
+    "Human-Computer Interaction – INTERACT"
+]
+
+# CSV 列头
+HEADERS = [
+    "title","doi","year","venue","authors","institutions",
+    "concepts","abstract","citation_count","counts_by_year",
+    "cited_by_api_url","is_oa","pdf_url","landing_url"
+]
+
+# --------------- Helper Functions --------------
 def reconstruct_abstract(inv_idx):
+    """从 inverted index 重建 abstract 文本"""
     try:
-        pos_token = []
-        for token, positions in inv_idx.items():
-            for p in positions:
-                pos_token.append((p, token))
-        pos_token.sort()
-        return ' '.join([tok for _, tok in pos_token])
-    except Exception:
+        items = [(pos, tok) for tok, poses in inv_idx.items() for pos in poses]
+        items.sort(key=lambda x: x[0])
+        return " ".join(tok for _, tok in items)
+    except:
         return None
 
-def fetch_openalex_works(start_year, end_year, per_page, mailto):
-    url = "https://api.openalex.org/works"
-    all_records = []
-    concept_filter = "concept.id:C41008148"
+# --------------- Main Logic --------------
+def run():
+    # 确保 data 目录存在
+    os.makedirs(os.path.dirname(OUTPUT_CSV), exist_ok=True)
+    # 如果文件不存在就先写 header
+    if not os.path.exists(OUTPUT_CSV):
+        with open(OUTPUT_CSV, "w", encoding="utf-8", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=HEADERS)
+            writer.writeheader()
 
-    for year in range(start_year, end_year + 1):
-        print(f"Fetching {year}...")
+    base_url = "https://api.openalex.org/works"
+    for year in range(START_YEAR, END_YEAR + 1):
         cursor = "*"
+        pbar = tqdm(desc=f"Year {year}", unit="page")
         while cursor:
             params = {
-                "filter": f"{concept_filter},from_publication_date:{year}-01-01,to_publication_date:{year}-12-31",
-                "per-page": per_page,
+                "filter": f"{FILTER_STR},"
+                          f"from_publication_date:{year}-01-01,"
+                          f"to_publication_date:{year}-12-31",
+                "per-page": PER_PAGE,
                 "cursor": cursor,
-                "mailto": mailto
+                "mailto": MAILTO
             }
-            resp = requests.get(url, params=params)
+            resp = requests.get(base_url, params=params)
             if resp.status_code != 200:
-                print(f"Error {resp.status_code} for year {year}")
+                print(f"[WARN] HTTP {resp.status_code} on year {year}, abort this year.")
                 break
             data = resp.json()
+
+            # 遍历每条结果，过滤 & 写入
             for item in data.get("results", []):
-                inv_idx = item.get("abstract_inverted_index") or {}
-                abstract = reconstruct_abstract(inv_idx) if inv_idx else None
+                host = item.get("host_venue") or {}
+                pl   = item.get("primary_location") or {}
+                src  = pl.get("source") or {}
+                venue = (
+                    host.get("display_name")
+                    or src.get("display_name")
+                    or ""
+                )
+                venue_l = venue.lower()
+                # 只要列表里有任意一个子串（也小写）出现在 venue_l 里，就保留
+                if not any(sub.lower() in venue_l for sub in VENUE_SUBSTRINGS):
+                    continue
 
-                authors = "; ".join(
-                    a["author"]["display_name"]
+                # 构建 record
+                inv_idx    = item.get("abstract_inverted_index") or {}
+                abstract   = reconstruct_abstract(inv_idx) if inv_idx else None
+                authors    = "; ".join(a["author"]["display_name"] for a in item.get("authorships", []))
+                insts      = {
+                    inst.get("display_name")
                     for a in item.get("authorships", [])
-                )
-
-                insts = set()
-                for a in item.get("authorships", []):
-                    for inst in a.get("institutions", []):
-                        insts.add(inst.get("display_name"))
-                institutions = "; ".join(insts) if insts else None
-
-                concepts = "; ".join(
-                    c.get("display_name")
-                    for c in item.get("concepts", [])
-                )
+                    for inst in a.get("institutions", [])
+                }
+                institutions   = "; ".join(insts) if insts else None
+                concepts       = "; ".join(c.get("display_name") for c in item.get("concepts", []))
+                loc            = item.get("primary_location") or {}
+                is_oa          = loc.get("is_oa", False)
+                pdf_url        = loc.get("pdf_url")
+                landing_url    = loc.get("landing_page_url")
+                citation_count = item.get("cited_by_count")
+                counts_by_year = item.get("counts_by_year")
+                work_id        = item.get("id", "")
+                cited_api_url  = f"https://api.openalex.org/works?filter=cites:{work_id}"
 
                 record = {
                     "title": item.get("title"),
+                    "doi": item.get("doi"),
+                    "year": year,
+                    "venue": venue,
                     "authors": authors,
                     "institutions": institutions,
-                    "year": item.get("publication_year"),
-                    "venue": item.get("host_venue", {}).get("display_name"),
-                    "doi": item.get("doi"),
-                    "citation_count": item.get("cited_by_count"),
-                    "abstract": abstract,
                     "concepts": concepts,
-                    "url": item.get("primary_location", {}).get("landing_page_url")
+                    "abstract": abstract,
+                    "citation_count": citation_count,
+                    "counts_by_year": counts_by_year,
+                    "cited_by_api_url": cited_api_url,
+                    "is_oa": is_oa,
+                    "pdf_url": pdf_url,
+                    "landing_url": landing_url
                 }
-                all_records.append(record)
 
+                # 写入一行
+                with open(OUTPUT_CSV, "a", encoding="utf-8", newline="") as f:
+                    writer = csv.DictWriter(f, fieldnames=HEADERS)
+                    writer.writerow(record)
+
+
+            # 翻页
             cursor = data.get("meta", {}).get("next_cursor")
+            pbar.update(1)
+            time.sleep(RATE_LIMIT)
 
-    return pd.DataFrame(all_records)
+        pbar.close()
 
-def main():
-    parser = argparse.ArgumentParser(description="Crawl OpenAlex for HCI works and save to CSV")
-    parser.add_argument("--start-year", type=int, default=2020)
-    parser.add_argument("--end-year", type=int, default=2024)
-    parser.add_argument("--output", type=str, default="data/raw/hci_works.csv")
-    parser.add_argument("--per-page", type=int, default=200)
-    parser.add_argument("--mailto", type=str, required=True)
-    args = parser.parse_args()
-
-    os.makedirs(os.path.dirname(args.output), exist_ok=True)
-
-    if os.path.exists(args.output):
-        existing = pd.read_csv(args.output)
-        years_done = set(existing['year'].unique())
-    else:
-        existing = pd.DataFrame()
-        years_done = set()
-
-    df_new = fetch_openalex_works(args.start_year, args.end_year, args.per_page, args.mailto)
-    df_new = df_new[~df_new['year'].isin(years_done)]
-
-    df_combined = pd.concat([existing, df_new], ignore_index=True)
-    df_combined.drop_duplicates(subset=['doi'], inplace=True)
-    df_combined.to_csv(args.output, index=False)
-    print(f"Saved {len(df_combined)} records to {args.output}")
+    print(f"All done! CSV 路径：{OUTPUT_CSV}")
 
 if __name__ == "__main__":
-    main()
+    run()
