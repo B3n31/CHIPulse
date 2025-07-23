@@ -10,7 +10,7 @@ from bs4 import BeautifulSoup, Tag, NavigableString
 
 # ---------------- Configuration ----------------
 OUTPUT_CSV = os.path.join("data", "raw", "committee_members.csv")
-START_YEAR = 2016
+START_YEAR = 2011
 END_YEAR   = 2025
 USER_AGENT = "Mozilla/5.0 (compatible; Bot/0.1; +https://your.site/)"
 
@@ -20,7 +20,221 @@ def fetch_url(url):
     r.raise_for_status()
     return r.text
 
-from bs4 import BeautifulSoup, Tag, NavigableString
+def scrape_chi_2011():
+    url = "http://chi2011.org/authors/selecting-subcommittee.html"
+    html = fetch_url(url)
+    soup = BeautifulSoup(html, "html.parser")
+
+    # 定位到真正的主内容区
+    container = soup.select_one("div#main-text-single-col")
+    if not container:
+        print("[WARN] CHI 2011: 找不到主体区域")
+        return []
+
+    results = []
+    # 每个版块的标题是 <h5><span id="...">版块名称</span></h5>
+    for h5 in container.find_all("h5"):
+        span = h5.find("span", id=True)
+        if not span:
+            continue
+        sub_name = span.get_text(strip=True)
+
+        # 跳过所有空行，直接找到第一个包含 “Associate Chairs” 字样的 <p>
+        ac_p = h5.find_next_sibling(lambda t: isinstance(t, Tag)
+                                           and t.name == "p"
+                                           and "Associate Chairs" in t.get_text())
+        if not ac_p:
+            continue
+
+        # 只取这个 <p> 中直接子节点的 <a>（不跨过其他层级）
+        for a in ac_p.find_all("a", recursive=False):
+            name = a.get_text(strip=True)
+            if name:
+                results.append((2011, sub_name, name))
+
+    print(f"[OK]   CHI 2011: got {len(results)} rows")
+    return results
+
+
+
+def scrape_chi_2012():
+    url = "https://chi2012.acm.org/cfp-selecting-subcommittee.shtml"
+    try:
+        html = fetch_url(url)
+    except Exception as e:
+        print(f"[WARN] CHI 2012: 无法访问页面 ({e})，跳过")
+        return []
+    
+    soup = BeautifulSoup(html, "html.parser")
+    container = soup.select_one("div.container div.content#content")
+    if not container:
+        print("[WARN] CHI 2012: 找不到主体区域，请检查 selector")
+        return []
+    
+    results = []
+    skip_ids = {"introduction", "guidance", "list-of-the-subcommittees"}
+    for h2 in container.find_all("h2", id=True):
+        if h2["id"] in skip_ids:
+            continue
+        sub_name = h2.get_text(strip=True)
+        
+        # 定位到 Associate Chairs:
+        ac_strong = h2.find_next(
+            lambda t: isinstance(t, Tag)
+                      and t.name == "strong"
+                      and "associate chairs" in t.get_text(strip=True).lower()
+        )
+        if not ac_strong:
+            continue
+        
+        # 整个 <p> 里既有 Chairs: 部分，也有 Associate Chairs: 部分
+        parent_p = ac_strong.find_parent("p")
+        
+        # 只从 Associate Chairs: 之后开始取
+        in_ac_list = False
+        for node in parent_p.contents:
+            # 如果又碰到 <strong>，检查一下是 Chairs 还是 Associate Chairs
+            if isinstance(node, Tag) and node.name == "strong":
+                txt = node.get_text(strip=True).lower()
+                in_ac_list = txt.startswith("associate chairs")
+                continue
+            
+            if not in_ac_list:
+                # 还没到副主席那一节，就跳过
+                continue
+            
+            # 只处理文本节点，跳过 <br>、<strong> 等
+            if isinstance(node, NavigableString):
+                name = node.strip().strip('“”" ,')
+                if name:
+                    results.append((2012, sub_name, name))
+        
+    print(f"[OK]   CHI 2012: got {len(results)} rows")
+    return results
+
+
+
+def scrape_chi_2013():
+    url = ("https://chi2013.acm.org/authors/call-for-participation/papers-notes/selecting-a-subcommittee")
+    html = fetch_url(url)
+    soup = BeautifulSoup(html, "html.parser")
+
+    # 1. 定位正文容器
+    entry = soup.select_one("div#post-316 .entry-content")
+    if not entry:
+        print("[WARN] CHI 2013: 找不到 entry-content")
+        return []
+
+    # 2. 定位到 “Subcommittee membership” 段
+    h2 = entry.find("h2", string=re.compile(r"Subcommittee membership", re.I))
+    if not h2:
+        print("[WARN] CHI 2013: 找不到 Subcommittee membership 标题")
+        return []
+
+    results = []
+    sib = h2
+
+    # 3. 从这个 H2 开始，依次查找后面的 <h3> + <table>
+    while True:
+        sib = sib.find_next_sibling()
+        if not sib:
+            break
+
+        # 只处理 <h3> 作为小节
+        if sib.name != "h3":
+            continue
+
+        full_title = sib.get_text(strip=True)
+        # 去掉尾部 “subcommittee”
+        sub_name = re.sub(r"\s*subcommittee$", "", full_title, flags=re.I)
+
+        # 4. 找到紧跟的那张表
+        tbl = sib.find_next_sibling("table", class_="tableizer-table")
+        if not tbl:
+            continue
+
+        # 5. 遍历表格每一行（跳过首行表头）
+        rows = tbl.select("tbody tr")[1:]
+        for tr in rows:
+            tds = tr.find_all("td")
+            if len(tds) < 3:
+                continue
+            name = tds[0].get_text(strip=True)
+            position = tds[2].get_text(strip=True)
+            # 只保留 Associate Chair (AC)
+            if re.fullmatch(r"AC", position, re.I):
+                results.append((2013, sub_name, name))
+
+    print(f"[OK]   CHI 2013: got {len(results)} rows")
+    return results
+
+
+def scrape_chi_2014to2015(year):
+    # 2014/2015 的 URL 都不要末尾斜杠
+    url = f"https://chi{year}.acm.org/authors/selecting-a-subcommittee"
+    try:
+        html = fetch_url(url)
+    except Exception as e:
+        print(f"[WARN] CHI {year}: 无法访问页面 ({e})，跳过")
+        return []
+
+    soup = BeautifulSoup(html, "html.parser")
+    # 2014 用 #content-canvas，2015 用 .container .column-main
+    if year == 2014:
+        container = soup.select_one("div#content-canvas")
+    else:
+        container = soup.select_one("div.container div.column-main")
+    if not container:
+        print(f"[WARN] CHI {year}: 找不到主内容区，请检查 selector")
+        return []
+
+    results = []
+    # 每个小节由 <h4 id="..."> 分割
+    for h4 in container.find_all("h4", id=True):
+        sub_name = h4.get_text(strip=True)
+
+        # 找到紧跟的“Subcommittee:”那行
+        sc_strong = h4.find_next(
+            lambda t: isinstance(t, Tag)
+                      and t.name == "strong"
+                      and "subcommittee" in t.get_text(strip=True).lower()
+        )
+        if not sc_strong:
+            continue
+
+        # 从这个 <strong> 所在的 <p>，取它后面的第一个兄弟 <p>
+        sc_p = sc_strong.find_parent("p").find_next_sibling("p")
+        if not sc_p:
+            continue
+
+        # 这个 <p> 里的内容是若干个文本节点/引号，再配合 <br> 分段
+        buf = []
+        def flush_buf():
+            name = "".join(buf).strip().strip('“”"')
+            if name:
+                results.append((year, sub_name, name))
+        for node in sc_p.children:
+            if isinstance(node, Tag) and node.name == "br":
+                flush_buf()
+                buf = []
+            else:
+                text = ""
+                if isinstance(node, NavigableString):
+                    text = node.strip()
+                elif isinstance(node, Tag):
+                    text = node.get_text(strip=True)
+                buf.append(text)
+        # 最后一段
+        flush_buf()
+
+    print(f"[OK]   CHI {year}: got {len(results)} rows")
+    return results
+
+
+
+
+
+
 
 def scrape_chi_2016():
     url = "https://chi2016.acm.org/wp/guide-to-selecting-a-subcommittee-for-submission/"
@@ -388,7 +602,15 @@ def main():
         w.writerow(["year","venue","committee","member"])
         
         for yr in range(START_YEAR, END_YEAR+1):
-            if yr == 2016:
+            if yr == 2011:
+                rows = scrape_chi_2011()
+            elif yr == 2012:
+                rows = scrape_chi_2012()
+            elif yr == 2013:
+                rows = scrape_chi_2013()
+            elif yr == yr in (2014, 2015):
+                rows = scrape_chi_2014to2015(yr)
+            elif yr == 2016:
                 rows = scrape_chi_2016()
             elif yr == 2017:
                 rows = scrape_chi_2017()
