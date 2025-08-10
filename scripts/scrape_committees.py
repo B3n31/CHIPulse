@@ -7,10 +7,13 @@ import csv
 import requests
 import re
 from bs4 import BeautifulSoup, Tag, NavigableString
+from PyPDF2 import PdfReader
+from typing import List, Tuple
+
 
 # ---------------- Configuration ----------------
 OUTPUT_CSV = os.path.join("data", "raw", "committee_members.csv")
-START_YEAR = 2011
+START_YEAR = 2005
 END_YEAR   = 2025
 USER_AGENT = "Mozilla/5.0 (compatible; Bot/0.1; +https://your.site/)"
 
@@ -20,42 +23,286 @@ def fetch_url(url):
     r.raise_for_status()
     return r.text
 
-def scrape_chi_2011():
-    url = "http://chi2011.org/authors/selecting-subcommittee.html"
+
+# ---------------- CHI 2005 - 2025 ----------------
+def scrape_chi_2005():
+    """
+    http://www.chi2005.org/cfp/papers_committee.html
+    只抓 <h2>Papers Associate Chairs</h2> 段
+    返回 [(2005, "Papers Associate Chairs", "Name, Affiliation, Country"), ...]
+    """
+    url = "http://www.chi2005.org/cfp/papers_committee.html"
     html = fetch_url(url)
     soup = BeautifulSoup(html, "html.parser")
 
-    # 定位到真正的主内容区
-    container = soup.select_one("div#main-text-single-col")
-    if not container:
-        print("[WARN] CHI 2011: 找不到主体区域")
+    # 锚点：<h2>Papers Associate Chairs</h2>
+    anchor = soup.find(lambda t: t.name in ("h2", "h3") and
+                                re.search(r"\bPapers\s+Associate\s+Chairs\b", t.get_text(), re.I))
+    if not anchor:
+        print("[WARN] CHI 2005: 找不到 Papers Associate Chairs")
+        return []
+
+    # 取锚点后第一个“真正装名单”的 <h3>（它内部含有 <i> 节点）
+    block = None
+    for h3 in anchor.find_all_next("h3"):
+        if h3.find("i"):
+            block = h3
+            break
+    if block is None:
+        print("[WARN] CHI 2005: 找不到名单容器 <h3>")
         return []
 
     results = []
-    # 每个版块的标题是 <h5><span id="...">版块名称</span></h5>
-    for h5 in container.find_all("h5"):
-        span = h5.find("span", id=True)
-        if not span:
+    buf = None  # 暂存 “Name,” 的碎片
+
+    # 遍历该 <h3> 的直接内容：文本碎片 + <i> + <br>
+    for node in block.children:
+        if isinstance(node, Tag) and node.name == "i":
+            aff = node.get_text(" ", strip=True).replace("\u00A0", " ")
+            if buf:
+                name = re.sub(r"\s*,\s*$", "", buf.strip())
+                member = f"{name}, {aff}" if aff else name
+                results.append((2005, "Papers Associate Chairs", member))
+                buf = None
             continue
-        sub_name = span.get_text(strip=True)
-
-        # 跳过所有空行，直接找到第一个包含 “Associate Chairs” 字样的 <p>
-        ac_p = h5.find_next_sibling(lambda t: isinstance(t, Tag)
-                                           and t.name == "p"
-                                           and "Associate Chairs" in t.get_text())
-        if not ac_p:
+        if isinstance(node, Tag) and node.name == "br":
             continue
 
-        # 只取这个 <p> 中直接子节点的 <a>（不跨过其他层级）
-        for a in ac_p.find_all("a", recursive=False):
-            name = a.get_text(strip=True)
-            if name:
-                results.append((2011, sub_name, name))
+        # 文本或其他内联标签的文本
+        txt = node.get_text(" ", strip=True) if isinstance(node, Tag) else str(node).strip()
+        if not txt:
+            continue
+        txt = txt.replace("\u00A0", " ")
+        txt = re.sub(r"^[•·,;\-\s]+", "", txt)  # 去前导符号
+        if not txt or re.fullmatch(r"Papers\s+Associate\s+Chairs", txt, re.I):
+            continue
+        buf = (f"{buf} {txt}".strip() if buf else txt)
 
-    print(f"[OK]   CHI 2011: got {len(results)} rows")
+    # 兜底：最后一个名字没有配到 <i>
+    if buf and "," in buf:
+        results.append((2005, "Papers Associate Chairs", re.sub(r"\s*,\s*$", "", buf.strip())))
+
+    print(f"[OK]   CHI 2005: got {len(results)} rows")
     return results
 
 
+def scrape_chi2006_2008_pdf(pdf_path: str, year: int) -> List[Tuple[int, str, str]]:
+    _NOISE_RE = re.compile(
+    r"^(CHI\s+Proceedings|Conference\s+Organization|Volume\s+\d+|April\s+\d{1,2}|Montr[eé]al|pages\s+\d+)",
+    re.IGNORECASE,)
+
+    if year not in (2006, 2007, 2008):
+        raise ValueError("year 必须是 2006/2007/2008")
+
+    reader = PdfReader(pdf_path)
+    full_text = ""
+    for page in reader.pages:
+        txt = page.extract_text()
+        if txt:
+            full_text += txt + "\n"
+
+    patterns = {
+        # 加了 Conference Organization / CHI Proceedings / Volume / April 兜底，避免越界
+        2006: r"Papers\s*,\s*Associate\s+Chairs(?:\s*[:\-–])?(.*?)(?=\n\s*Papers\s*,\s*Reviewers|\n\s*Papers\s+Reviewers|\n\s*ACKNOWLEDG(E)?MENTS|\Z)",
+        2007: r"PAPERS\s+ASSOCIATE\s+CHAIRS(.*?)(?=PAPERS\s+REVIEWERS|ACKNOWLEDGEMENTS|$)",
+        2008: r"PAPER\s+ASSOCIATE\s+CHAIRS(.*?)(?=NOTE\s+ASSOCIATE\s+CHAIRS|REVIEWERS|ACKNOWLEDGEMENTS|$)",
+    }
+    labels = {
+        2006: "Papers, Associate Chairs",
+        2007: "Papers Associate Chairs",
+        2008: "Paper Associate Chairs",
+    }
+
+    m = re.search(patterns[year], full_text, flags=re.IGNORECASE | re.DOTALL)
+    if not m:
+        print(f"[WARN] CHI {year}: 没找到 AC 区块")
+        return []
+    block = m.group(1)
+
+    # 通用预处理
+    block = re.sub(r"(\w)-\s*\n\s*(\w)", r"\1\2", block)     # Uni-\nversity -> University
+    block = re.sub(r",\s*\n\s*\n\s*", ", ", block)           # ",\n\nCountry" -> ", Country"
+    block = re.sub(r",\s*\n\s*", ", ", block)                # ",\nCountry" -> ", Country"
+
+    raw_lines = []
+    for ln in block.splitlines():
+        ln = ln.strip()
+        if not ln:
+            continue
+        if _NOISE_RE.match(ln):
+            continue
+        # 把行内残留的 “... Associate Chairs, ” 前缀剥掉（含被断开的 “sociate Chairs”）
+        ln = re.sub(r".*\bPapers?\s*,?\s*Associate\s*Chairs\b\s*[:,;—\-]*\s*", "", ln, flags=re.IGNORECASE)
+        ln = re.sub(r".*\bsociate\s*Chairs\b\s*[:,;—\-]*\s*", "", ln, flags=re.IGNORECASE)
+        if not ln:
+            continue
+        raw_lines.append(ln)
+
+    results: List[Tuple[int, str, str]] = []
+
+    if year == 2006:
+        country_tails = {
+            "USA","UK","Canada","France","Denmark","Japan","Italy","Israel","Finland",
+            "Germany","Scotland","England","Ireland","Austria","Australia","New Zealand",
+            "Netherlands","The Netherlands","Spain","Portugal","Belgium","Sweden","Norway",
+            "Brazil","Brasil","Korea","South Korea","Taiwan","China","Greece","Switzerland"
+        }
+        def is_complete(rec: str) -> bool:
+            if rec.count(",") < 2:
+                return False
+            last = rec.rstrip(" ,.;").split()
+            return bool(last) and last[-1] in country_tails
+
+        combined = []
+        i = 0
+        while i < len(raw_lines):
+            rec = raw_lines[i]
+            while (i + 1) < len(raw_lines) and not is_complete(rec):
+                nxt = raw_lines[i + 1]
+                rec = (rec if rec.endswith(",") else rec.rstrip(",") + ",") + " " + nxt
+                i += 1
+            rec = rec.strip().rstrip(",")
+            # 修正 “University-of-Michigan” 这类断词连字
+            rec = re.sub(r"\s*-\s*of\s*-\s*", " of ", rec)
+            combined.append(rec)
+            i += 1
+
+        for rec in combined:
+            if rec and rec.count(",") >= 2 and rec.split()[-1] in country_tails:
+                results.append((2006, labels[2006], rec))
+    
+    if year == 2006 and not any("dourish" in r[2].lower() for r in results):
+            # 规范化分页/换行
+            ft = full_text.replace("\r", "\n").replace("\f", "\n")
+
+            # 只在 AC 段落之后的一小段文本里查，避免误命中别处
+            sm = re.search(r"Papers\s*,\s*Associate\s+Chairs", ft, flags=re.IGNORECASE)
+            tail = ft[sm.end():] if sm else ft
+            tail = tail[:5000]  # 保守截取
+
+            # 匹配形如：xviiPaul Dourish, University of California, Irvine, U.S.A./USA
+            m_pd = re.search(
+                r"(?:\b[ivxlcdm]{1,8}\s*)?"
+                r"(Paul\s+Dourish,\s*University\s+of\s+California,\s*Irvine,\s*(?:U\.?S\.?A\.?|USA))",
+                tail,
+                flags=re.IGNORECASE
+            )
+            if m_pd:
+                rec = m_pd.group(1)
+                rec = re.sub(r"\s+", " ", rec).strip()
+                rec = rec.replace("U.S.A.", "USA").replace("U.S.A", "USA")
+                # 追加并保证不重复
+                if not any(rec.lower() == x[2].lower() for x in results):
+                    results.append((2006, labels[2006], rec))
+
+    else:
+        combined = []
+        i = 0
+        while i < len(raw_lines):
+            line = raw_lines[i]
+            if line.endswith(",") and i + 1 < len(raw_lines) and "," not in raw_lines[i + 1]:
+                rec = line.rstrip(",") + ", " + raw_lines[i + 1]
+                i += 2
+            else:
+                rec = line
+                i += 1
+            rec = re.sub(r"\s*-\s*of\s*-\s*", " of ", rec)
+            combined.append(rec)
+
+        for rec in combined:
+            rec = rec.strip().rstrip(",")
+            if rec.count(",") >= 2:
+                results.append((year, labels[year], rec))
+
+    print(f"[OK]   CHI {year}: got {len(results)} rows")
+    return results
+
+
+def scrape_chi_2009():
+    url = "http://www.chi2009.org:88/Authors/CallForPapers/Subcommittees.html"
+    try:
+        html = fetch_url(url)
+    except Exception as e:
+        print(f"[WARN] CHI 2009: 无法访问页面 ({e})，跳过")
+        return []
+
+    soup = BeautifulSoup(html, "html.parser")
+    # 1) 定位主内容区
+    container = soup.select_one("div#mainContent")
+    if not container:
+        print("[WARN] CHI 2009: 找不到主内容区 div#mainContent")
+        return []
+
+    results = []
+    # 2) 遍历每个子版块 <h3>
+    for h3 in container.find_all("h3"):
+        sub_name = h3.get_text(strip=True)
+        # 3) 找到后面的 div#subcommitteeMembers
+        members_div = h3.find_next_sibling(lambda t: isinstance(t, Tag)
+                                           and t.name == "div"
+                                           and t.get("id") == "subcommitteeMembers")
+        if not members_div:
+            continue
+
+        # 4) 在这块里取 ul#SubCommitteeAssociateChairs 下的所有 li
+        ul = members_div.select_one("ul#SubCommitteeAssociateChairs")
+        if not ul:
+            continue
+        for li in ul.find_all("li"):
+            name = li.get_text(strip=True).strip('“”"')
+            if name:
+                results.append((2009, sub_name, name))
+
+    print(f"[OK]   CHI 2009: got {len(results)} rows")
+    return results
+
+def scrape_chi_2010to2011(year):
+    results = []
+    if year == 2010:
+        url = "http://chi2010.org/authors/selecting-subcommittee.html"
+        html = fetch_url(url)
+        soup = BeautifulSoup(html, "html.parser")
+        container = soup.select_one("div#mainContent div#content")
+        if not container:
+            print("[WARN] CHI 2010: 找不到主体区域"); return []
+        for h5 in container.find_all("h5", id=True):
+            sub_name = h5.get_text(strip=True)
+            p = h5.find_next_sibling("p")
+            while p and "Associate Chairs" not in p.get_text():
+                p = p.find_next_sibling("p")
+            if not p: continue
+            text = p.get_text(separator=" ", strip=True)
+            text = text.strip('"“” \n')
+            text = re.sub(r'^[Aa]ssociate Chairs[:：]?\s*', "", text)
+            for part in text.split(","):
+                name = part.strip(' "“”')
+                if name: results.append((2010, sub_name, name))
+        print(f"[OK]   CHI 2010: got {len(results)} rows")
+        return results
+
+    elif year == 2011:
+        url = "http://chi2011.org/authors/selecting-subcommittee.html"
+        html = fetch_url(url)
+        soup = BeautifulSoup(html, "html.parser")
+        container = soup.select_one("div#main-text-single-col")
+        if not container:
+            print("[WARN] CHI 2011: 找不到主体区域"); return []
+        for h5 in container.find_all("h5"):
+            span = h5.find("span", id=True)
+            if not span: continue
+            sub_name = span.get_text(strip=True)
+            ac_p = h5.find_next_sibling(lambda t: isinstance(t, Tag)
+                                                   and t.name == "p"
+                                                   and "Associate Chairs" in t.get_text())
+            if not ac_p: continue
+            for a in ac_p.find_all("a", recursive=False):
+                name = a.get_text(strip=True)
+                if name: results.append((2011, sub_name, name))
+        print(f"[OK]   CHI 2011: got {len(results)} rows")
+        return results
+
+    else:
+        return []
 
 def scrape_chi_2012():
     url = "https://chi2012.acm.org/cfp-selecting-subcommittee.shtml"
@@ -587,12 +834,6 @@ def scrape_chi_year(year):
     print(f"[OK]   CHI {year}: 抓取到 {len(results)} 条 Associate Chairs")
     return results
 
-# ---------------- 其他顶会 ----------------
-def scrape_uist_year(year):
-    return []
-
-def scrape_cscw_year(year):
-    return []
 
 # ---------------- Main ----------------
 def main():
@@ -602,13 +843,23 @@ def main():
         w.writerow(["year","venue","committee","member"])
         
         for yr in range(START_YEAR, END_YEAR+1):
-            if yr == 2011:
-                rows = scrape_chi_2011()
+            if yr == 2005:
+                rows = scrape_chi_2005()
+            elif yr == 2006:
+                rows = scrape_chi2006_2008_pdf("sources/2006CHI.pdf", yr)
+            elif yr == 2007:
+                rows = scrape_chi2006_2008_pdf("sources/2007CHI.pdf", yr)
+            elif yr == 2008:
+                rows = scrape_chi2006_2008_pdf("sources/2008CHI.pdf", yr)
+            elif yr == 2009:
+                rows = scrape_chi_2009()
+            elif yr in (2010, 2011):
+                rows = scrape_chi_2010to2011(yr)
             elif yr == 2012:
                 rows = scrape_chi_2012()
             elif yr == 2013:
                 rows = scrape_chi_2013()
-            elif yr == yr in (2014, 2015):
+            elif yr in (2014, 2015):
                 rows = scrape_chi_2014to2015(yr)
             elif yr == 2016:
                 rows = scrape_chi_2016()
@@ -616,8 +867,6 @@ def main():
                 rows = scrape_chi_2017()
             elif yr in (2018, 2019, 2020):
                 rows = scrape_chi_2018to2020(yr)
-            elif yr == 2021:
-                rows = scrape_chi_2021()
             elif yr == 2021:
                 rows = scrape_chi_2021()
             elif yr == 2022:
