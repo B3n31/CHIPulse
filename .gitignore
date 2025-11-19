@@ -21,5 +21,3 @@ hcitool-env/
 # Jupyter checkpoints
 .ipynb_checkpoints/
 
-# Output data (optional)
-data/raw/*.csv
