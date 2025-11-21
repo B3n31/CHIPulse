@@ -8,7 +8,7 @@ DB_PATH = Path("database/chi_ac.db")
 DBLP_SEARCH_URL = "https://dblp.org/search/author/api"
 
 # 每次运行最多成功处理多少个 person，避免一口气打完 2600 个
-MAX_SUCCESS_PER_RUN = 150
+MAX_SUCCESS_PER_RUN = 2000
 
 # 正常情况下，两次请求之间的固定间隔（秒）
 BASE_SLEEP = 8
@@ -27,7 +27,7 @@ def search_dblp(name: str, max_retries: int = 6):
     - 多次失败：返回 []
     """
     params = {"q": name, "format": "json"}
-    backoff = 10  # 起始退避 10 秒，后面翻倍，最多到 120
+    backoff = 10  # 起始退避 10 秒，后面翻倍，最多到 40
 
     for attempt in range(max_retries):
         try:
@@ -35,21 +35,21 @@ def search_dblp(name: str, max_retries: int = 6):
         except requests.RequestException as e:
             print(f"  网络错误({e}), 等 {backoff}s 重试...")
             time.sleep(backoff)
-            backoff = min(backoff * 2, 120)
+            backoff = min(backoff * 2, 40)
             continue
 
         # 限流
         if resp.status_code == 429:
             print(f"  429 Too Many Requests, 等 {backoff}s 再试...")
             time.sleep(backoff)
-            backoff = min(backoff * 2, 120)
+            backoff = min(backoff * 2, 40)
             continue
 
         # 服务器 5xx
         if 500 <= resp.status_code < 600:
             print(f"  服务器错误 {resp.status_code}, 等 {backoff}s 再试...")
             time.sleep(backoff)
-            backoff = min(backoff * 2, 120)
+            backoff = min(backoff * 2, 40)
             continue
 
         try:
