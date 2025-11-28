@@ -22,24 +22,41 @@ document.addEventListener('DOMContentLoaded', () => {
 
     sendBtn.addEventListener('click', sendMessage);
 
-    function sendMessage() {
+    async function sendMessage() {
         const text = userInput.value.trim();
         if (!text) return;
 
-        // Add User Message
+        // 显示用户消息
         appendMessage('user', text);
         userInput.value = '';
         userInput.style.height = 'auto';
 
-        // Simulate AI Response
         showTypingIndicator();
-        
-        // Mock API delay
-        setTimeout(() => {
+
+        try {
+            const resp = await fetch('/api/generate', {   // 注意：用相对路径，方便同源部署
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ prompt: text })
+            });
+
+            const data = await resp.json();
             removeTypingIndicator();
-            const response = generateMockResponse(text);
-            streamResponse(response);
-        }, 1500);
+
+            if (!data.ok) {
+                appendMessage('ai', 'Server error: ' + (data.error || 'Unknown error'));
+                return;
+            }
+
+            // 用你原来写的打字机效果
+            streamResponse(data.text);
+
+        } catch (err) {
+            removeTypingIndicator();
+            appendMessage('ai', 'Network error: ' + err.message);
+        }
     }
 
     function appendMessage(role, text) {
@@ -103,16 +120,16 @@ document.addEventListener('DOMContentLoaded', () => {
         }, 20); // Typing speed
     }
 
-    function generateMockResponse(input) {
-        const responses = [
-            "That's an interesting perspective! Tell me more.",
-            "I can certainly help you with that. Here's what I found...",
-            "Could you clarify what you mean by that?",
-            "I'm just a mock AI, but I think your idea is great!",
-            "Based on my training data, the answer is 42.",
-            "Let's break this down step by step.",
-            "I'm listening. Go on."
-        ];
-        return responses[Math.floor(Math.random() * responses.length)];
-    }
+    // function generateMockResponse(input) {
+    //     const responses = [
+    //         "That's an interesting perspective! Tell me more.",
+    //         "I can certainly help you with that. Here's what I found...",
+    //         "Could you clarify what you mean by that?",
+    //         "I'm just a mock AI, but I think your idea is great!",
+    //         "Based on my training data, the answer is 42.",
+    //         "Let's break this down step by step.",
+    //         "I'm listening. Go on."
+    //     ];
+    //     return responses[Math.floor(Math.random() * responses.length)];
+    // }
 });

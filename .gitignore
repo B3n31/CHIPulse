@@ -21,3 +21,5 @@ hcitool-env/
 # Jupyter checkpoints
 .ipynb_checkpoints/
 
+# api-keys
+.env
