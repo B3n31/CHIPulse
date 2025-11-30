@@ -111,31 +111,92 @@ document.addEventListener('DOMContentLoaded', () => {
         const messageDiv = appendMessage('ai', '');
         const contentDiv = messageDiv.querySelector('.message-content');
 
-        const parts = fullText.trim().split(/\n\n+/);
+        let text = (fullText || '').trim();
+
+        let keywordsText = '';
+        const keywordMatch = text.match(/keywords?\s*[:：]\s*(.+)$/im);
+        if (keywordMatch) {
+            keywordsText = keywordMatch[1].trim();
+            text = text.replace(keywordMatch[0], '').trim();
+
+            keywordsText = keywordsText.replace(/([a-z])([A-Z])/g, '$1; $2');
+        }
+
+
+        // ---------- 拆标题 & 段落 ----------
+        const parts = text.split(/\n\n+/);
         const rawTitle = (parts.shift() || '').trim();
-        const titleText = rawTitle.replace(/^TITLE[:\-]?\s*/i, '');  // remove word TITLE:
+        const titleText = rawTitle.replace(/^TITLE[:\-]?\s*/i, '');
 
         contentDiv.innerHTML = '';
 
         const titleEl = document.createElement('h3');
-        titleEl.textContent = titleText;
+        titleEl.className = 'ai-title';
+        titleEl.textContent = titleText || ' ';
         contentDiv.appendChild(titleEl);
 
-        const paraInfos = (parts.length ? parts : [''])
+        const paraInfos = [];
+        parts
             .map(p => p.trim())
             .filter(p => p.length > 0)
-            .map(pText => {
+            .forEach(pText => {
                 const pEl = document.createElement('p');
+                pEl.className = 'ai-paragraph';
                 pEl.textContent = '';
                 contentDiv.appendChild(pEl);
-                return { el: pEl, text: pText };
+                paraInfos.push({ el: pEl, text: pText });
             });
 
-        if (paraInfos.length === 0) {
+        if (paraInfos.length === 0 && text) {
             const pEl = document.createElement('p');
+            pEl.className = 'ai-paragraph';
             pEl.textContent = '';
             contentDiv.appendChild(pEl);
-            paraInfos.push({ el: pEl, text: fullText.trim() });
+            paraInfos.push({ el: pEl, text });
+        }
+
+        function renderKeywords() {
+            if (!keywordsText) return;
+
+            const kwWrapper = document.createElement('div');
+            kwWrapper.className = 'ai-keywords';
+
+            const label = document.createElement('span');
+            label.className = 'ai-keywords-label';
+            label.textContent = 'Keywords: ';
+            kwWrapper.appendChild(label);
+
+            let rawKeywords = keywordsText
+                .split(/[;,]/)
+                .map(k => k.trim())
+                .filter(Boolean);
+
+            if (rawKeywords.length === 1 && !keywordsText.includes(',') && !keywordsText.includes(';')) {
+                const parts = keywordsText.trim().split(/\s+/);
+                if (parts.length > 1) {
+                    rawKeywords = [
+                        parts.slice(0, parts.length - 1).join(' '),
+                        parts[parts.length - 1]
+                    ];
+                }
+            }
+
+            const finalKeywords = rawKeywords.map(k =>
+                k.charAt(0).toUpperCase() + k.slice(1)
+            );
+
+            finalKeywords.forEach((k, idx) => {
+                if (idx > 0) {
+                    kwWrapper.appendChild(document.createTextNode('; '));
+                }
+                const chip = document.createElement('span');
+                chip.className = 'ai-keyword-chip';
+                chip.textContent = k;
+                kwWrapper.appendChild(chip);
+            });
+
+            contentDiv.appendChild(kwWrapper);
+            scrollToBottom();
         }
 
         let paraIdx = 0;
@@ -145,6 +206,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const current = paraInfos[paraIdx];
             if (!current) {
                 clearInterval(interval);
+                renderKeywords();
                 return;
             }
 
@@ -157,7 +219,9 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             scrollToBottom();
-        }, 10); // type speed
+        }, 5);
     }
+
+
 
 });
