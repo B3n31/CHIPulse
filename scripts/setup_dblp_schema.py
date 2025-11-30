@@ -1,7 +1,7 @@
 import sqlite3
 from pathlib import Path
 
-DB_PATH = Path("database/chi_ac.db")  # 视你的目录调整
+DB_PATH = Path("database/chi_ac.db")
 
 def column_exists(cur, table, col):
     cur.execute(f"PRAGMA table_info({table});")
@@ -12,13 +12,11 @@ def main():
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
 
-    # persons 表加 dblp_pid / dblp_url 列（如果还没有）
     if not column_exists(cur, "persons", "dblp_pid"):
         cur.execute("ALTER TABLE persons ADD COLUMN dblp_pid TEXT;")
     if not column_exists(cur, "persons", "dblp_url"):
         cur.execute("ALTER TABLE persons ADD COLUMN dblp_url TEXT;")
 
-    # 建候选表
     cur.execute("""
         CREATE TABLE IF NOT EXISTS person_dblp_candidates (
             candidate_id   INTEGER PRIMARY KEY,

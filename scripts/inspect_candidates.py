@@ -7,7 +7,7 @@ def main():
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
 
-    print("=== 每个 person 的候选数量分布（前 20） ===")
+    print("=== Candidate count per person (top 20) ===")
     cur.execute("""
         SELECT person_id, COUNT(*) AS cnt
         FROM person_dblp_candidates
@@ -18,7 +18,7 @@ def main():
     for person_id, cnt in cur.fetchall():
         print(person_id, cnt)
 
-    print("\n=== 各种 match_status 计数（如果已经跑过 pick_best） ===")
+    print("\n=== match_status distribution (after running pick_best) ===")
     cur.execute("""
         SELECT match_status, COUNT(*)
         FROM persons

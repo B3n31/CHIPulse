@@ -26,7 +26,6 @@ document.addEventListener('DOMContentLoaded', () => {
         const text = userInput.value.trim();
         if (!text) return;
 
-        // 显示用户消息
         appendMessage('user', text);
         userInput.value = '';
         userInput.style.height = 'auto';
@@ -34,7 +33,7 @@ document.addEventListener('DOMContentLoaded', () => {
         showTypingIndicator();
 
         try {
-            const resp = await fetch('/api/generate', {   // 注意：用相对路径，方便同源部署
+            const resp = await fetch('/api/generate', {   
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json'
@@ -50,7 +49,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 return;
             }
 
-            // 用你原来写的打字机效果
             streamResponse(data.text);
 
         } catch (err) {
@@ -67,15 +65,20 @@ document.addEventListener('DOMContentLoaded', () => {
             ? '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a10 10 0 0 1 10 10c0 5.523-4.477 10-10 10S2 17.523 2 12 6.477 2 12 2Z"/><path d="m9 12 2 2 4-4"/></svg>'
             : '<div style="width: 24px; height: 24px; background: #555; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: white; font-size: 12px;">U</div>';
 
+        const contentHtml = (role === 'ai' && text === '')
+            ? '<div class="message-content"></div>'
+            : `<div class="message-content"><p>${text}</p></div>`;
+
         messageDiv.innerHTML = `
             <div class="message-avatar">${avatar}</div>
-            <div class="message-content"><p>${text}</p></div>
+            ${contentHtml}
         `;
         
         messagesContainer.appendChild(messageDiv);
         scrollToBottom();
         return messageDiv;
     }
+
 
     function showTypingIndicator() {
         const indicatorDiv = document.createElement('div');
@@ -106,30 +109,55 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function streamResponse(fullText) {
         const messageDiv = appendMessage('ai', '');
-        const contentP = messageDiv.querySelector('.message-content p');
-        let index = 0;
+        const contentDiv = messageDiv.querySelector('.message-content');
+
+        const parts = fullText.trim().split(/\n\n+/);
+        const rawTitle = (parts.shift() || '').trim();
+        const titleText = rawTitle.replace(/^TITLE[:\-]?\s*/i, '');  // remove word TITLE:
+
+        contentDiv.innerHTML = '';
+
+        const titleEl = document.createElement('h3');
+        titleEl.textContent = titleText;
+        contentDiv.appendChild(titleEl);
+
+        const paraInfos = (parts.length ? parts : [''])
+            .map(p => p.trim())
+            .filter(p => p.length > 0)
+            .map(pText => {
+                const pEl = document.createElement('p');
+                pEl.textContent = '';
+                contentDiv.appendChild(pEl);
+                return { el: pEl, text: pText };
+            });
+
+        if (paraInfos.length === 0) {
+            const pEl = document.createElement('p');
+            pEl.textContent = '';
+            contentDiv.appendChild(pEl);
+            paraInfos.push({ el: pEl, text: fullText.trim() });
+        }
+
+        let paraIdx = 0;
+        let charIdx = 0;
 
         const interval = setInterval(() => {
-            if (index < fullText.length) {
-                contentP.textContent += fullText.charAt(index);
-                index++;
-                scrollToBottom();
-            } else {
+            const current = paraInfos[paraIdx];
+            if (!current) {
                 clearInterval(interval);
+                return;
             }
-        }, 20); // Typing speed
+
+            current.el.textContent = current.text.slice(0, charIdx);
+            charIdx++;
+
+            if (charIdx > current.text.length) {
+                paraIdx++;
+                charIdx = 0;
+            }
+
+            scrollToBottom();
+        }, 10); // type speed
     }
 
-    // function generateMockResponse(input) {
-    //     const responses = [
-    //         "That's an interesting perspective! Tell me more.",
-    //         "I can certainly help you with that. Here's what I found...",
-    //         "Could you clarify what you mean by that?",
-    //         "I'm just a mock AI, but I think your idea is great!",
-    //         "Based on my training data, the answer is 42.",
-    //         "Let's break this down step by step.",
-    //         "I'm listening. Go on."
-    //     ];
-    //     return responses[Math.floor(Math.random() * responses.length)];
-    // }
 });

@@ -4,7 +4,6 @@ from llm_router import answer_with_db_tools   # ← 关键：把 router 引进�
 
 app = Flask(__name__)
 
-# 前端目录：scripts/../front-end
 FRONTEND_DIR = os.path.join(os.path.dirname(__file__), "..", "front-end")
 
 

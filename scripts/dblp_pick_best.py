@@ -7,7 +7,7 @@ DB_PATH = Path("database/chi_ac.db")
 
 def name_tokens(s: str):
     """
-    去重音、转小写、去掉标点，只留字母和空格 → token list
+    Remove accents, lowercase, strip punctuation, keep only letters and spaces → token list.
     """
     s = unicodedata.normalize("NFKD", s)
     s = "".join(c for c in s if not unicodedata.combining(c))
@@ -18,17 +18,17 @@ def name_tokens(s: str):
 
 def name_key(s: str) -> str:
     """
-    规范化名字，用于“强一致”匹配：
+    Normalize a name for “strict” matching:
     Xing-Dong Yang / Xing dong Yang / xing-dong yang -> "xing dong yang"
     """
     return " ".join(name_tokens(s))
 
 def name_similarity(canon: str, author: str) -> float:
     """
-    简单名字相似度：
+    Simple name similarity:
     - token Jaccard
-    - 姓氏相同 +0.2
-    - 完全同 token 直接 1.0
+    - same last name: +0.2
+    - exactly same token list → 1.0
     """
     t1 = name_tokens(canon)
     t2 = name_tokens(author)
@@ -54,7 +54,6 @@ def main():
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
 
-    # 确保列存在
     cur.execute("PRAGMA table_info(persons);")
     cols = {row[1] for row in cur.fetchall()}
     if "dblp_pid" not in cols:
@@ -65,7 +64,6 @@ def main():
         cur.execute("ALTER TABLE persons ADD COLUMN match_status TEXT NOT NULL DEFAULT 'unknown';")
     conn.commit()
 
-    # 清空旧结果
     cur.execute("UPDATE person_dblp_candidates SET chosen = 0;")
     cur.execute("""
         UPDATE persons
@@ -77,7 +75,7 @@ def main():
 
     cur.execute("SELECT person_id, canonical_name FROM persons")
     persons = cur.fetchall()
-    print(f"总共 {len(persons)} 人，开始匹配 DBLP pid...")
+    print(f"Total {len(persons)} persons, start matching DBLP pid...")
 
     for idx, (person_id, canon) in enumerate(persons, start=1):
         cur.execute("""
@@ -97,7 +95,7 @@ def main():
 
         canon_k = name_key(canon)
 
-        # 1️⃣ 先找“规范化名字完全一致”的候选
+        # First look for candidates whose normalized name key exactly matches
         exact_key_cands = []
         sims = []
 
@@ -109,13 +107,13 @@ def main():
                 exact_key_cands.append((sim, cand_id, pid, url, author, ak))
 
         if exact_key_cands:
-            # 有至少一个 key 完全一致的，直接挑相似度最高的那个
+            # At least one candidate has exactly the same key → pick the one with highest similarity
             exact_key_cands.sort(reverse=True, key=lambda x: x[0])
             best_sim, best_cid, best_pid, best_url, best_name, _ = exact_key_cands[0]
             status = "matched_exact"
             choose = True
         else:
-            # 2️⃣ 否则退回原来的 best_sim / second_sim 逻辑
+            # Otherwise fall back to the old best_sim / second_sim heuristic
             sims.sort(reverse=True, key=lambda x: x[0])
             best_sim, best_cid, best_pid, best_url, best_name, _ = sims[0]
             second_sim = sims[1][0] if len(sims) > 1 else 0.0
@@ -160,11 +158,11 @@ def main():
 
         if idx % 100 == 0:
             conn.commit()
-            print(f"已处理 {idx}/{len(persons)}")
+            print(f"Processed {idx}/{len(persons)}")
 
     conn.commit()
     conn.close()
-    print("v2-key 匹配完成。")
+    print("v2-key matching finished.")
 
 if __name__ == "__main__":
     main()

@@ -7,7 +7,6 @@ def main():
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
 
-    # 论文表：一篇 paper 一行
     cur.execute("""
         CREATE TABLE IF NOT EXISTS publications (
             pub_key   TEXT PRIMARY KEY,      -- dblp 的 key，例如 conf/chi/2005/xxx
@@ -20,7 +19,6 @@ def main():
         );
     """)
 
-    # authorship：哪位 AC 参与了哪篇 paper
     cur.execute("""
         CREATE TABLE IF NOT EXISTS authorships (
             pub_key    TEXT,

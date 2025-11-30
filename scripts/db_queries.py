@@ -4,14 +4,13 @@ from typing import List, Dict, Any, Optional
 from db_utils import run_sql
 
 # ======================
-# 1. 年度 / 机构类统计
+# 1. Yearly / Affiliation Statistics
 # ======================
-
 
 def get_ac_year_stats_all() -> List[Dict[str, Any]]:
     """
-    年度 AC 总量（所有 persons，不管有没有 DBLP 匹配）
-    返回: [{year, ac_count}, ...]
+    Yearly total number of ACs (all persons, regardless of DBLP matching).
+    Returns: [{year, ac_count}, ...]
     """
     rows = run_sql(
         """
@@ -28,8 +27,8 @@ def get_ac_year_stats_all() -> List[Dict[str, Any]]:
 
 def get_ac_year_stats_high_conf() -> List[Dict[str, Any]]:
     """
-    只看 persons_high_conf（高置信匹配到 DBLP 的 AC）的年度 AC 数量。
-    返回: [{year, ac_count_high_conf}, ...]
+    Yearly number of ACs in persons_high_conf (high-confidence DBLP matches).
+    Returns: [{year, ac_count_high_conf}, ...]
     """
     rows = run_sql(
         """
@@ -51,9 +50,9 @@ def get_ac_year_stats_high_conf() -> List[Dict[str, Any]]:
 
 def get_top_affiliations_high_conf(limit: int = 20) -> List[Dict[str, Any]]:
     """
-    看高置信 AC 的机构出现次数（根据 ac_roles.affiliation_raw）。
-    这里简单地按“某人某年某 committee”算一条记录。
-    返回: [{affiliation, ac_roles_count}, ...]
+    Counts high-confidence AC appearances by affiliation (ac_roles.affiliation_raw).
+    Each “person-year-committee” record counts as 1.
+    Returns: [{affiliation, ac_roles_count}, ...]
     """
     rows = run_sql(
         """
@@ -82,8 +81,8 @@ def get_ac_list_by_year(
     high_conf_only: bool = False,
 ) -> List[Dict[str, Any]]:
     """
-    某一年的 AC 名单（可选：只看高置信）。
-    返回: [{person_id, name, year, venue, committee, affiliation, country}, ...]
+    AC list for a given year (optional: only high-confidence persons).
+    Returns: [{person_id, name, year, venue, committee, affiliation, country}, ...]
     """
     if high_conf_only:
         rows = run_sql(
@@ -133,9 +132,9 @@ def get_affiliation_trend(
     high_conf_only: bool = True,
 ) -> List[Dict[str, Any]]:
     """
-    查询某个机构（模糊匹配关键字）在各年的 AC 数量变化。
-    keyword 例子: 'microsoft', 'toronto', 'google'
-    返回: [{year, ac_count}, ...]
+    Query yearly trend for an institution (fuzzy keyword match).
+    Example keywords: 'microsoft', 'toronto', 'google'
+    Returns: [{year, ac_count}, ...]
     """
     pattern = f"%{keyword.lower()}%"
     if high_conf_only:
@@ -172,18 +171,17 @@ def get_affiliation_trend(
 
 
 # ======================
-# 2. 人物查询 / 搜索
+# 2. Person Lookup / Profile
 # ======================
-
 
 def get_person_full_profile(person_id: int) -> Optional[Dict[str, Any]]:
     """
-    给定 person_id，返回：
-    - persons 里的记录
-    - 此人在各年的 AC 角色
-    - 此人所有论文列表（来自 publications/authorships）
+    For a given person_id, return:
+    - Record from persons table
+    - All AC roles across the years
+    - All publications (from publications/authorships)
     """
-    # 基本信息
+    # Person basic info
     person_rows = run_sql(
         """
         SELECT *
@@ -196,7 +194,7 @@ def get_person_full_profile(person_id: int) -> Optional[Dict[str, Any]]:
         return None
     person = dict(person_rows[0])
 
-    # AC 角色
+    # AC roles
     roles = run_sql(
         """
         SELECT year, venue, committee, affiliation_raw, country
@@ -208,7 +206,7 @@ def get_person_full_profile(person_id: int) -> Optional[Dict[str, Any]]:
     )
     person["ac_roles"] = [dict(r) for r in roles]
 
-    # 论文
+    # Publications
     pubs = run_sql(
         """
         SELECT
@@ -239,8 +237,9 @@ def find_persons_by_name(
     limit: int = 50,
 ) -> List[Dict[str, Any]]:
     """
-    根据名字关键字模糊搜索 persons（方便你在 notebook 里找人）。
-    返回: [{person_id, canonical_name, match_status, dblp_pid}, ...]
+    Fuzzy search over persons by name substring.
+    Useful when browsing in notebook.
+    Returns: [{person_id, canonical_name, match_status, dblp_pid}, ...]
     """
     pattern = f"%{name_substring.lower()}%"
     if high_conf_only:
@@ -279,14 +278,14 @@ def find_persons_by_name(
 
 
 # ======================
-# 3. 论文 / 合作者结构
+# 3. Publications / Coauthor Structure
 # ======================
-
 
 def get_hci_ac_publication_stats() -> List[Dict[str, Any]]:
     """
-    高置信 AC 写的论文，在不同年份/venue 的分布。
-    返回: [{year, venue, paper_count, unique_ac_authors}, ...]
+    Distribution of publications authored by high-confidence ACs
+    across years and venues.
+    Returns: [{year, venue, paper_count, unique_ac_authors}, ...]
     """
     rows = run_sql(
         """
@@ -309,8 +308,8 @@ def get_hci_ac_publication_stats() -> List[Dict[str, Any]]:
 
 def get_person_pub_venues(person_id: int) -> List[Dict[str, Any]]:
     """
-    某位 AC 在不同 venue 上的发文情况。
-    返回: [{venue, paper_count, first_year, last_year}, ...]
+    Publication venues for a given AC.
+    Returns: [{venue, paper_count, first_year, last_year}, ...]
     """
     rows = run_sql(
         """
@@ -336,8 +335,8 @@ def get_coauthors_for_person(
     limit: int = 50,
 ) -> List[Dict[str, Any]]:
     """
-    某位 AC 的合作者列表，只在 authorships 里出现过的人。
-    返回: [{coauthor_person_id, coauthor_name, paper_count}, ...]
+    Coauthor list for a given AC (from authorships table).
+    Returns: [{coauthor_person_id, coauthor_name, paper_count}, ...]
     """
     rows = run_sql(
         """
@@ -360,14 +359,16 @@ def get_coauthors_for_person(
     )
     return [dict(r) for r in rows]
 
+
 def smart_person_lookup(name: str):
     """
     High-level wrapper:
-    1) find_persons_by_name
-    2) choose the best match (id)
-    3) get full profile
-    4) get publications
-    返回格式：
+    1) Fuzzy search by name
+    2) Pick best match (first for now)
+    3) Fetch full profile
+    4) Fetch venue-level publication stats
+
+    Returns:
     {
         "person": {...},
         "publications": [...]
@@ -378,7 +379,6 @@ def smart_person_lookup(name: str):
     if not persons or len(persons) == 0:
         return {"error": "no_match", "results": []}
 
-    # 简单选第一个（你可以改为更复杂的规则）
     p = persons[0]
     pid = p["person_id"]
 
@@ -391,9 +391,8 @@ def smart_person_lookup(name: str):
     }
 
 
-
 # ======================
-# 4. 趋势 / 总览类辅助函数
+# 4. Trend / Overview Utilities
 # ======================
 
 def get_top_countries_overall(
@@ -401,8 +400,8 @@ def get_top_countries_overall(
     high_conf_only: bool = True,
 ) -> List[Dict[str, Any]]:
     """
-    全局看 AC 所在国家的分布（按出现过 AC 的人数计）。
-    返回: [{country, ac_count}, ...]，按 ac_count 降序，仅取前 limit 个。
+    Global distribution of ACs by country (counting unique persons).
+    Returns: [{country, ac_count}, ...], sorted by ac_count desc.
     """
     if high_conf_only:
         rows = run_sql(
@@ -446,27 +445,12 @@ def get_ac_year_overview(
     max_committees: int = 30,
 ) -> Dict[str, Any]:
     """
-    单一年份的总览：
-    - 总 AC 数
-    - 按国家分布（带百分比）
-    - 按 committee 分布（带百分比）
-
-    返回:
-    {
-      "year": 2025,
-      "high_conf_only": true,
-      "total_ac": 841,
-      "countries": [
-        {"country": "USA", "ac_count": 400, "percentage": 47.56},
-        ...
-      ],
-      "committees": [
-        {"committee": "Papers", "ac_count": 600, "percentage": 71.34},
-        ...
-      ]
-    }
+    Year-specific overview:
+    - Total AC count
+    - Country distribution with percentages
+    - Committee distribution with percentages
     """
-    # 1) 总人数
+    # Total AC count
     if high_conf_only:
         total_rows = run_sql(
             """
@@ -490,7 +474,7 @@ def get_ac_year_overview(
 
     total_ac = total_rows[0]["total_ac"] if total_rows else 0
 
-    # 辅助：算百分比
+    # Helper for adding percentages
     def add_percentage(rows, key_name: str, max_items: int):
         if total_ac <= 0:
             return []
@@ -506,7 +490,7 @@ def get_ac_year_overview(
             )
         return out
 
-    # 2) 国家分布
+    # Country distribution
     if high_conf_only:
         country_rows = run_sql(
             """
@@ -538,7 +522,7 @@ def get_ac_year_overview(
 
     countries = add_percentage(country_rows, "country", max_countries)
 
-    # 3) committee 分布
+    # Committee distribution
     if high_conf_only:
         committee_rows = run_sql(
             """
@@ -578,19 +562,21 @@ def get_ac_year_overview(
         "committees": committees,
     }
 
+
 def get_trend_overview(
     high_conf_only: bool = True,
 ) -> Dict[str, Any]:
     """
-    面向 LLM 的“趋势总览”：把常用的全局信息收在一起。
-    返回字段尽量精简，避免一次性喂太大 JSON。
+    LLM-friendly “trend overview”:
+    Summarizes commonly used global statistics in a compact structure.
+    Avoids sending overly large JSON blobs at once.
     """
     if high_conf_only:
         year_stats = get_ac_year_stats_high_conf()
     else:
         year_stats = get_ac_year_stats_all()
 
-    # 全局 top affiliations / countries，数量都限制好
+    # Global top affiliations / countries
     top_affs = get_top_affiliations_high_conf(limit=20)
     top_countries = get_top_countries_overall(
         limit=20,
@@ -603,4 +589,3 @@ def get_trend_overview(
         "top_affiliations": top_affs,
         "top_countries": top_countries,
     }
-

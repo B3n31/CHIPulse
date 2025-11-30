@@ -7,47 +7,46 @@ import unicodedata
 DB_PATH = Path("database/chi_ac.db")
 DBLP_SEARCH_URL = "https://dblp.org/search/author/api"
 
-# 每次运行最多成功处理多少个 person，避免一口气打完 2600 个
-MAX_SUCCESS_PER_RUN = 2000
+MAX_SUCCESS_PER_RUN = 500
 
-# 正常情况下，两次请求之间的固定间隔（秒）
+# Base sleep time (seconds) between each request
 BASE_SLEEP = 8
 
 def normalize_name(s: str) -> str:
-    """去重音 + 小写，用来简单算 score"""
+    """Remove accents + lowercase; used for simple scoring."""
     s = unicodedata.normalize("NFKD", s)
     s = "".join(c for c in s if not unicodedata.combining(c))
     return s.lower().strip()
 
 def search_dblp(name: str, max_retries: int = 6):
     """
-    带退避重试的 DBLP 搜索：
-    - 429 / 5xx / 网络错误：指数退避
-    - 成功：返回 hits 列表
-    - 多次失败：返回 []
+    DBLP search with retry + exponential backoff:
+    - 429 / 5xx / network errors → retry with backoff
+    - Success → return list of hits
+    - After repeated failures → return []
     """
     params = {"q": name, "format": "json"}
-    backoff = 10  # 起始退避 10 秒，后面翻倍，最多到 40
+    backoff = 10  # initial backoff (seconds), doubling up to 40
 
     for attempt in range(max_retries):
         try:
             resp = requests.get(DBLP_SEARCH_URL, params=params, timeout=20)
         except requests.RequestException as e:
-            print(f"  网络错误({e}), 等 {backoff}s 重试...")
+            print(f"  Network error ({e}), retrying in {backoff}s...")
             time.sleep(backoff)
             backoff = min(backoff * 2, 40)
             continue
 
-        # 限流
+        # Rate limit
         if resp.status_code == 429:
-            print(f"  429 Too Many Requests, 等 {backoff}s 再试...")
+            print(f"  429 Too Many Requests, retrying in {backoff}s...")
             time.sleep(backoff)
             backoff = min(backoff * 2, 40)
             continue
 
-        # 服务器 5xx
+        # Server-side error
         if 500 <= resp.status_code < 600:
-            print(f"  服务器错误 {resp.status_code}, 等 {backoff}s 再试...")
+            print(f"  Server error {resp.status_code}, retrying in {backoff}s...")
             time.sleep(backoff)
             backoff = min(backoff * 2, 40)
             continue
@@ -55,7 +54,7 @@ def search_dblp(name: str, max_retries: int = 6):
         try:
             resp.raise_for_status()
         except requests.RequestException as e:
-            print(f"  其他 HTTP 错误({e})，不再重试，跳过这个人")
+            print(f"  Other HTTP error ({e}), skipping this person")
             return []
 
         data = resp.json()
@@ -64,14 +63,14 @@ def search_dblp(name: str, max_retries: int = 6):
             hits = [hits]
         return hits
 
-    print("  多次重试仍失败，先跳过这个人")
+    print("  Failed after repeated retries, skipping this person")
     return []
 
 def main():
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
 
-    # ✅ 断点续跑：只选还没在 person_dblp_candidates 出现过的人
+    # Resume support: only process persons not yet in person_dblp_candidates
     cur.execute("""
         SELECT person_id, canonical_name
         FROM persons
@@ -82,16 +81,16 @@ def main():
     """)
     persons = cur.fetchall()
     total = len(persons)
-    print(f"需要搜索 {total} 个名字")
+    print(f"{total} names need DBLP search")
 
-    success = 0  # 本轮已经成功处理多少 person
+    success = 0 
 
     for idx, (person_id, name) in enumerate(persons, start=1):
         if success >= MAX_SUCCESS_PER_RUN:
-            print(f"本轮已成功处理 {success} 个，先停在这里，下次再继续。")
+            print(f"Reached {success} successful persons for this run, stopping for now.")
             break
 
-        print(f"[{idx}/{total}] 搜索 {name} ...")
+        print(f"[{idx}/{total}] Searching {name} ...")
 
         hits = search_dblp(name)
         base = normalize_name(name)
@@ -104,7 +103,7 @@ def main():
             if not author_name or not url:
                 continue
 
-            # url 形如 'https://dblp.org/pid/37/1234' → pid '37/1234'
+            # URL like: https://dblp.org/pid/12/1234 → pid = "12/1234"
             pid = url.split("pid/")[-1]
 
             score = 1.0 if normalize_name(author_name) == base else 0.0
@@ -121,11 +120,11 @@ def main():
         if inserted > 0:
             success += 1
 
-        # 基础节奏：无论有没有 429，每搜完一个人都慢一点
+        # Base pacing: always sleep a bit after each person
         time.sleep(BASE_SLEEP)
 
     conn.close()
-    print(f"DBLP 搜索完成，本轮成功处理 {success} 个")
+    print(f"DBLP search finished, successfully processed {success} persons in this run")
 
 if __name__ == "__main__":
     main()

@@ -21,7 +21,6 @@ from db_queries import (
 load_dotenv(override=True)
 API_KEY = os.getenv("OPENAI_API_KEY")
 client = OpenAI(api_key=API_KEY)
-print("DEBUG KEY:", repr(os.getenv("OPENAI_API_KEY")))
 # ===================== Style Samples =====================
 
 SAMPLE_TEXT = """
@@ -38,7 +37,7 @@ CSCW and Scientific Practices.
 Earlier studies quantitatively examined the CSCW literature by tracing citation counts over time and mapping collaboration networks. One line of work analyzed thousands of citations to assess the impact of CSCW research over several years, revealing relatively stable citation volumes during the 1990s. Co-authorship network analyses showed that CSCW authors maintained strong collaborations with researchers in other fields, although physical proximity still played a major role in enabling joint work. Other studies focused on the demographics of CSCW conferences, showing a high proportion of contributions from US-based academics compared to European researchers, and highlighting a sustained emphasis on group issues and system design. Subsequent scientometric analyses identified a stable share of design and evaluation studies, a decline in non-empirical work, and an increasing use of experiments and ethnographic methods.
 """
 
-# ===================== System Prompt (只管写作风格) =====================
+# ===================== System Prompt =====================
 
 SYSTEM_PROMPT = (
     "You are an HCI / scientometrics researcher and narrative writer.\n"
@@ -47,13 +46,19 @@ SYSTEM_PROMPT = (
     "WRITING FORMAT (MANDATORY):\n"
     "- Final answer must be a short scientometrics subsection with:\n"
     "  1) a TITLE (one line, evocative but concise),\n"
-    "  2) then exactly two narrative paragraphs (about 200–260 words total).\n"
+    "  2) then exactly two narrative paragraphs (about 200–260 words total),\n"
+    "  3) and finally ONE line of research keywords.\n"
     "- Paragraph 1: broader trend or context that relates to the question.\n"
     "- Paragraph 2: zoom into one or two concrete examples "
     "(e.g., one AC, one institution, one committee, or one year).\n"
     "- Each answer must include at least THREE concrete facts "
     "(years, venues, roles, counts, institutions, or paper titles) "
-    "that appear in the structured data.\n\n"
+    "that appear in the structured data.\n"
+    "- After the two paragraphs, add one line in the form:\n"
+    "  KEYWORDS: keyword1; keyword2\n"
+    "  where each keyword is a short English research keyword (1–3 words), "
+    "  capturing the main critical angle of the subsection (e.g., "
+    "  'AC diversity', 'institutional concentration').\n\n"
     "STYLE:\n"
     "- Tone similar to the style samples: scientometric, interpretive, slightly story-like.\n"
     "- You may use light metaphors (currents, clusters, trajectories) but stay grounded.\n"
@@ -61,6 +66,7 @@ SYSTEM_PROMPT = (
     "- Do NOT mention JSON, schemas, tools, or databases.\n"
     "- Do NOT mention 'high confidence' or any internal labels.\n"
 )
+
 
 # ===================== Tool definitions =====================
 
@@ -313,25 +319,15 @@ def _call_local_tool(name: str, arguments: dict):
 # ===================== Main entry =====================
 
 def answer_with_db_tools(user_query: str) -> str:
-    """
-    两阶段：
-    1. 规划：让模型决定要调哪些工具，只读取 tool_calls，不用它写的文字。
-    2. 执行：本地执行工具，整理成 JSON context。
-    3. 生成：开启新一轮对话，用 JSON + 样例写故事式小节。
-    """
-
-    # 先准备一个收集容器，人物这条链可以直接往里塞
     collected: dict[str, list[dict]] = {}
 
-    # ---------- 0. 人物专用预处理：从名字 -> person_id -> 作品 ----------
-    # 不管用户问啥，先用整句做一次模糊搜索，看能不能匹配到人
+    # ---------- preprocessing ----------
     person_hits = find_persons_by_name(
         name_substring=user_query,
         high_conf_only=True,
         limit=5,
     )
     if person_hits:
-        # 保存候选列表，方便模型看到有好几个同名
         collected["find_persons_by_name"] = [
             {
                 "args": {
@@ -343,7 +339,6 @@ def answer_with_db_tools(user_query: str) -> str:
             }
         ]
 
-        # 先用第一个命中当“主角”（之后你可以换成打分 / 让前端选人）
         main_person_id = person_hits[0]["person_id"]
 
         full_profile = get_person_full_profile(main_person_id) or {}
@@ -362,7 +357,7 @@ def answer_with_db_tools(user_query: str) -> str:
             }
         ]
 
-    # ---------- 1. 下面才是原来的 planning 步骤 ----------
+    # ---------- planning ----------
     planning_messages = [
         {
             "role": "system",
@@ -412,7 +407,6 @@ def answer_with_db_tools(user_query: str) -> str:
                 }
             )
 
-    # 如果前面人物预处理 + planning 都没产出任何东西，再兜底
     if not collected:
         collected["get_trend_overview"] = [
             {
@@ -423,7 +417,6 @@ def answer_with_db_tools(user_query: str) -> str:
 
     db_context_json = json.dumps(collected, ensure_ascii=False, indent=2)
 
-    # ---------- 2. 用整理好的 JSON 写故事（保持你现在那一段不动） ----------
     final_messages = [
         {
             "role": "system",
@@ -441,9 +434,11 @@ def answer_with_db_tools(user_query: str) -> str:
                 "- Output format:\n"
                 "  1) First line: a short, evocative TITLE.\n"
                 "  2) Then TWO paragraphs (~200–260 words total).\n"
+                "  3) Finally ONE line of critical research keywords in the form:\n"
+                "     KEYWORDS: keyword1; keyword2\n"
                 "- Use ONLY facts that appear in the structured data above.\n"
                 "- No bullet points. No mention of tools or databases.\n"
-                "- Start directly with the TITLE.\n\n"
+                "- Start directly with the TITLE (no preamble).\n\n"
                 "STYLE REFERENCE (for tone and rhythm only, do NOT copy wording):\n"
                 f"{SAMPLE_TEXT}\n"
             ),
