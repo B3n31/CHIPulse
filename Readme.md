@@ -1,76 +1,127 @@
-# HCI Trend Analysis Project
+# CHIPulse: A Human-Centered AI Interface for Scientometric Exploration
 
-This project collects structured data on Human–Computer Interaction (HCI) research papers from the OpenAlex API. It enables future analysis of trends, topics, citations, and more in the HCI community.
+**(Lightweight README for Running the System)**
+
+## Overview
+
+CHIPulse is an interactive, data-centric system designed to explore 20 years of CHI Associate Chair (AC) data (2005–2025).
+The system combines:
+
+* A **structured SQLite database** containing AC identities, affiliations, committees, and publication histories
+* An **LLM router** that plans and issues controlled SQL tool calls
+* A **data-grounded generation module** that produces hallucination-free scientometric narratives
+
+This repository includes all necessary data and the finalized database, so the system can be run immediately without re-scraping or rebuilding.
 
 ---
 
-## 🔧 Setup Instructions
+## Features
 
-### 1. Navigate to the project root
-```bash
-cd path/to/hci_trend_analysis_project
-```
+* **Structured SQL database** built from CHI AC lists and DBLP publications
+* **Deterministic LLM routing** (planning → SQL → JSON)
+* **Front-end interface** for interactive exploration
+* **Traceable generation pipeline** ensuring factual correctness
+* **No external knowledge** used during content generation
 
-### 2. Create and activate a virtual environment
+---
+
+## Requirements
+
+* Python 3.9+
+* `pip`
+* OpenAI API key (for GPT-5 Mini or equivalent)
+
+All Python dependencies are listed in `requirements.txt`.
+
+---
+
+## Setup
+
+### 1. Create and activate a virtual environment
+
 ```bash
-# macOS / Linux
 python3 -m venv hcitool-env
-source hcitool-env/bin/activate
+source hcitool-env/bin/activate       # macOS / Linux
 
-# Windows (PowerShell)
-python -m venv hcitool-env
-.\hcitool-env\Scripts\Activate.ps1
+# Windows:
+# .\hcitool-env\Scripts\activate
 ```
 
-### 3. Install required packages
+### 2. Install dependencies
+
 ```bash
-pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
----
+### 3. Create a `.env` file in the project root
 
-## 📦 Requirements
+```
+OPENAI_API_KEY=your_key_here
+```
 
-File: `requirements.txt`
-```
-requests
-pandas
-tqdm
-```
+The backend automatically loads this file.
 
 ---
 
-## 🚀 Run the Crawler
+## Running CHIPulse
+
+### 1. Start the backend server
 
 ```bash
-python scripts/hci_crawler.py \
-  --start-year 2020 \
-  --end-year 2024 \
-  --output data/raw/hci_works.csv \
-  --per-page 200 \
-  --mailto your-email@example.com
+python scripts/api_server.py
 ```
 
+If successful, Flask will display something like:
+
+```
+* Running on http://127.0.0.1:5000
+```
+
+### 2. Open the front-end UI
+
+Simply open the Flask in your browser:
+
+
+You can now submit questions such as:
+
+* “Show me trends in CHI over the past decade”
+* “Tell me something about SomeOne and his research trajectory”
+* “Which institutions appear most frequently among CHI ACs?”
+
+The system will:
+
+1. Interpret your query
+2. Plan SQL tool calls
+3. Retrieve data from `database/chi_ac.db`
+4. Generate a structured narrative based solely on the database
+
 ---
 
-## 📁 Output CSV Columns
+## Project Structure
 
-- `title`
-- `authors`
-- `institutions`
-- `year`
-- `venue`
-- `doi`
-- `citation_count`
-- `abstract`
-- `concepts`
-- `url`
+```
+├── data/
+│   └── raw/                      # Original scraped committee data
+│
+├── database/
+│   └── chi_ac.db                 # Final structured SQLite database (ACs, roles, pubs)
+│
+├── front-end/
+│   ├── index.html                # UI
+│   ├── script.js                 # Handles API calls and rendering
+│   └── style.css
+│
+├── scripts/
+│   ├── api_server.py             # Backend server (LLM router + SQL tools)
+│   ├── llm_router.py             # Planning → SQL → JSON orchestration
+│   ├── db_queries.py             # SQL tool functions
+│   ├── build_db_from_csv.py      # (Not needed now; db already provided)
+│   ├── dblp_fetch_publications.py
+│   ├── scrape_committees.py
+│   └── ...
+│
+├── sources/                      # PDF archives (optional)
+├── requirements.txt
+└── Readme.md
+```
 
----
-
-## ✅ Future Plans
-
-- Support automatic updates
-- Add notebook-based and dashboard-style analysis
-- Expand to other HCI-related venues
