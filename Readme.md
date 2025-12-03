@@ -1,7 +1,5 @@
 # CHIPulse: A Human-Centered AI Interface for Scientometric Exploration
 
-**(Lightweight README for Running the System)**
-
 ## Overview
 
 CHIPulse is an interactive, data-centric system designed to explore 20 years of CHI Associate Chair (AC) data (2005–2025).
